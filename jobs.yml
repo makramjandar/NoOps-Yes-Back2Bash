@@ -15,10 +15,6 @@ parameters:
       UNIC: v100
       DON: ''
       NAME: v1.0.0
-    - TYPE: VER
-      UNIC: v110
-      DON: ''
-      NAME: v1.1.0
   ENVS:
     - TYPE: ENV
       UNIC: dev1
