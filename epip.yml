@@ -11,7 +11,7 @@ pool:
 
 stages:
 - stage: IaC
-  displayName: Destroy Azure Environment Pipeline
+  displayName: Destroy Azure Env Pipeline
   jobs:
   - template: jobs.yml
     parameters:
