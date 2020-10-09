@@ -11,7 +11,7 @@ pool:
 
 stages:
 - stage: IaC
-  displayName: Create Azure Environment Pipeline
+  displayName: Create Azure Env Pipeline
   jobs:
   - template: jobs.yml
     parameters:
