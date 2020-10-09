@@ -1,0 +1,212 @@
+parameters:
+  MAIN:
+    ORG_URL: 'https://dev.azure.com/datascientificallyyours'
+    PROJECT: programmez
+    PAT: MYPAT
+  ORGS:
+    - TYPE: ORG
+      UNIC: inf1
+      DON: ''
+      NAME: Infeeny
+      URL: 'https://dev.azure.com/datascientificallyyours/'
+      PROJECT: programmez
+  VERS:
+    - TYPE: VER
+      UNIC: v100
+      DON: ''
+      NAME: v1.0.0
+    - TYPE: VER
+      UNIC: v110
+      DON: ''
+      NAME: v1.1.0
+  ENVS:
+    - TYPE: ENV
+      UNIC: dev1
+      DON: ''
+      NAME: DEV
+    - TYPE: ENV
+      UNIC: prd2
+      DON: dev1
+      NAME: PRD
+  LOCS:
+    - TYPE: LOC
+      UNIC: weu1
+      DON: ''
+      NAME: westeurope
+  AZRS:
+    - ID: '1'
+      TYPE: RESOURCE_GROUP
+      UNIC: ag1
+      CREATE: '"az group create -n $AZR_NAME -l $AZR_LOC --tags ${AZR_TAGS}"'
+    - ID: '2'
+      TYPE: STORAGE_ACCOUNT
+      UNIC: sa1
+      CREATE: >-
+        "az storage account create -n $AZR_NAME -g $RESOURCE_GROUP1 -l $AZR_LOC
+        --sku Standard_LRS --kind StorageV2 --encryption-services blob file
+        --https-only true --tags ${AZR_TAGS}"
+      UPDATE: >-
+        "az storage account update -n $AZR_NAME -g $RESOURCE_GROUP1
+        --encryption-key-source Microsoft.Storage"
+    - ID: '3'
+      TYPE: KEYVAULT
+      UNIC: kv1
+      CREATE: >-
+        "az keyvault create -n $AZR_NAME -g $RESOURCE_GROUP1 -l $AZR_LOC --sku
+        standard --enable-soft-delete false --tags ${AZR_TAGS}"
+    - ID: '4'
+      TYPE: APP_INSIGHTS
+      UNIC: ai1
+      CREATE: >-
+        "az monitor app-insights component create --app $AZR_NAME -g
+        $RESOURCE_GROUP1 -l $AZR_LOC --tags ${AZR_TAGS}"
+    - ID: '5'
+      TYPE: ACR
+      UNIC: ac1
+      CREATE: >-
+        "az acr create -n $AZR_NAME -g $RESOURCE_GROUP1 -l $AZR_LOC --sku
+        Standard --admin-enabled true --tags ${AZR_TAGS}"
+    - ID: '6'
+      TYPE: AML
+      UNIC: ml1
+      CREATE: >-
+        "az ml workspace create -w $AZR_NAME -g $RESOURCE_GROUP1 -l $AZR_LOC
+        --application-insights $APP_INSIGHTS4_ID --keyvault $KEYVAULT3_ID
+        --container-registry $ACR5_ID --storage-account $STORAGE_ACCOUNT2_ID"
+    - ID: '7'
+      TYPE: VARIABLE_GROUP
+      UNIC: vg1
+      CREATE: >-
+        "az pipelines variable-group create --name $AZR_BASE --authorize true
+        --variables BASE_NAME=$AZR_BASE LOCATION=$AZR_LOC
+        RESOURCE_GROUP=$RESOURCE_GROUP1 WORKSPACE_NAME=$AML6
+        AZURE_RM_SVC_CONNECTION=$ARM WORKSPACE_SVC_CONNECTION=$WSC
+        ACI_DEPLOYMENT_NAME=diabetes-aci"
+  SVCS:
+    AZURE_RM_SVC_CONNECTION: ARM
+    WORKSPACE_SVC_CONNECTION: WSC
+  PIPE: ''
+
+
+        
+jobs:
+- job: IaC
+  steps:
+  - task: AzureCLI@2
+    displayName: Conf. & Setup
+    inputs:
+      azureSubscription: ${{ parameters.SVCS.AZURE_RM_SVC_CONNECTION }}
+      scriptType: "bash"
+      scriptLocation: inlineScript
+      inlineScript: |
+        # Providers registration
+        echo Microsoft.MachineLearning microsoft.insights | xargs -n 1 az provider register -n
+    env:
+      PAT: $(MYPAT)
+- ${{ each ORG in parameters.ORGS }}:
+  - ${{ each VER in parameters.VERS }}:
+    - ${{ each ENV in parameters.ENVS }}:
+      - ${{ each LOC in parameters.LOCS }}:
+        - job: ${{ format('{0}{1}{2}{3}', ORG.UNIC, VER.UNIC, ENV.UNIC, LOC.UNIC) }}
+          displayName: ${{ format('{0} {1} {2} {3} {4}', parameters.PIPE, ORG.NAME, VER.NAME, ENV.NAME, LOC.NAME) }}
+          dependsOn:
+          - IaC
+          - ${{ if ne(ENV.DON, '') }}:
+            - ${{ format('{0}{1}{2}{3}', ORG.UNIC, VER.UNIC, ENV.DON, LOC.UNIC) }}
+          - ${{ if ne(VER.DON, '') }}:
+            - ${{ format('{0}{1}{2}{3}', ORG.UNIC, VER.DON, ENV.UNIC, LOC.UNIC) }}
+          steps:
+          # Download your pat secure files in the agent machine
+          - task: DownloadSEcureFile@1
+            name: MYPAT
+            inputs:
+              secureFile: mypat.txt
+          # Install JMESPath
+          - bash: |
+              wget https://github.com/jmespath/jp/releases/download/0.1.3/jp-linux-amd64 -O /home/vsts/work/jp
+              PATH=/home/vsts/work/jp:$PATH
+              source /home/vsts/work/jp
+              sudo chmod +x /home/vsts/work/jp
+            displayName: Install JMESPath
+          # Add Azure CLI extension
+          - bash: |
+              echo azure-devops application-insights azure-cli-ml | xargs -n 1 az extension add -y -n
+            displayName: Add Azure CLI extension
+          # Provisioning Azure Resources
+          - ${{ each AZR in parameters.AZRS }}:
+            - ${{ if eq(parameters.PIPE, 'Create') }}:
+              - task: AzureCLI@2
+                displayName: ${{ parameters.PIPE }} AZ${{ AZR.ID }}  ${{ AZR.TYPE }} ${{ AZR.UNIC }}
+                inputs: 
+                  azureSubscription: ${{ parameters.SVCS.AZURE_RM_SVC_CONNECTION }}
+                  scriptType: "bash"
+                  scriptLocation: inlineScript
+                  inlineScript: |
+                    #----------------------------------------------------------------------------- 
+                    # Declare variables
+                    #-----------------------------------------------------------------------------
+                    AZURE_RM_SVC_CONNECTION=${{ parameters.SVCS.AZURE_RM_SVC_CONNECTION }}
+                    WORKSPACE_SVC_CONNECTION=${{ parameters.SVCS.WORKSPACE_SVC_CONNECTION }}
+                    AZR_LOC=${{ LOC.NAME }}
+                    AZR_TYPE=${{ AZR.TYPE }}
+                    AZR_TAGS="${{ format('ORG={0} VER={1} ENV={2} LOC={3} PID={4} NUM={5}', ORG.NAME, VER.NAME, ENV.NAME, LOC.NAME, AZR.ID, AZR.UNIC) }}"
+                    AZR_BASE=${{ ORG.UNIC }}${{ VER.UNIC }}${{ ENV.UNIC }}${{ LOC.UNIC }}az${{ AZR.ID }}
+                    AZR_UPDATE=${{ AZR.UPDATE }}
+
+                    #-----------------------------------------------------------------------------
+                    # Set Variable Group
+                    #-----------------------------------------------------------------------------
+                    if [[ $AZR_TYPE == VARIABLE_GROUP ]]; then
+                      # Export Personal Access Token for Azure DevOps Services signing
+                      #cat $(MYPAT.secureFIlePath) | az devops login --organization ${{ parameters.MAIN.ORG_URL }}
+                      export AZURE_DEVOPS_EXT_PAT=$MYSECRETPAT
+                      # Configure the Azure DevOps CLI
+                      az devops configure -d organization=${{ parameters.MAIN.ORG_URL }} project=${{ parameters.MAIN.PROJECT }}
+                    fi
+                    #----------------------------------------------------------------------------- 
+                    # Create/Update Azure resource
+                    #-----------------------------------------------------------------------------                    
+                    AZR_NAME=${AZR_BASE}${{ AZR.UNIC }}
+                    $(echo ${{ AZR.CREATE }}) > ${AZR_NAME}Info.json
+                    [[ ! -z $AZR_UPDATE ]] && $(echo ${{ AZR.UPDATE }}) > ${AZR_NAME}Info.json
+                    
+                    #----------------------------------------------------------------------------- 
+                    # Remove info lines and declare Azure resource name
+                    #-----------------------------------------------------------------------------
+                    grep -v "with name" ${AZR_NAME}Info.json > ${AZR_NAME}.json
+                    echo "##vso[task.setvariable variable=${{ AZR.TYPE }}${{ AZR.ID }}]${AZR_NAME}"
+                    echo +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                    cat ${AZR_NAME}.json
+                    echo +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+                    #-----------------------------------------------------------------------------
+                    # Check deployment state and declare resource id
+                    #-----------------------------------------------------------------------------                   
+                    AZR_STATE=$(/home/vsts/work/jp -f ${AZR_NAME}.json -u properties.provisioningState)
+                    AZR_ID=$(/home/vsts/work/jp -f ${AZR_NAME}.json -u id)
+                    echo "##vso[task.setvariable variable=${{ AZR.TYPE }}${{ AZR.ID }}_ID]${AZR_ID}"
+                env:
+                  MYSECRETPAT: $(MYPAT)
+            - ${{ if eq(parameters.PIPE, 'Destroy') }}:
+              - ${{ if eq(AZR.TYPE, 'RESOURCE_GROUP') }}:
+                - task: AzureCLI@2
+                  displayName: ${{ parameters.PIPE }} AZ${{ AZR.ID }}  ${{ AZR.TYPE }} ${{ AZR.UNIC }}
+                  inputs: 
+                    azureSubscription: ${{ parameters.SVCS.AZURE_RM_SVC_CONNECTION }}
+                    scriptType: "bash"
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      #----------------------------------------------------------------------------- 
+                      # Declare variables
+                      #-----------------------------------------------------------------------------
+                      AZR_LOC=${{ LOC.NAME }}
+                      AZR_BASE=${{ ORG.UNIC }}${{ VER.UNIC }}${{ ENV.UNIC }}${{ LOC.UNIC }}az${{ AZR.ID }}
+                      AZR_NAME=${AZR_BASE}${{ AZR.UNIC }}  
+                      
+                      #----------------------------------------------------------------------------- 
+                      # Destroy Azure Resurce Group and all Infra's dependencies if exists
+                      #-----------------------------------------------------------------------------
+                      if [[ $(az group exists -n $AZR_NAME) == "true" ]]
+                      then az group delete -n $AZR_NAME --yes
+                      else echo "Inexistant $AZR_NAME Azure Resource Group !!"
+                      fi
